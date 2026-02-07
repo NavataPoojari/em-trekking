@@ -2,74 +2,52 @@ pipeline {
     agent any
 
     environment {
-        DEPLOY_DIR = "C:\\deployments\\trekky-hub"
-        BACKEND_PORT = "8000"
-        FRONTEND_PORT = "3000"
+        DOCKER_USERNAME = "navatha24"
+        BACKEND_IMAGE   = "trekky-backend"
+        FRONTEND_IMAGE  = "trekky-frontend"
+        K8S_NAMESPACE   = "default"
     }
 
     stages {
 
-        stage('Checkout Code') {
+        stage('Checkout') {
             steps {
-                git branch: 'main',
-                    url: 'https://github.com/JayadipReddy/em-trekking.git'
+                checkout scm
             }
         }
 
-        stage('Copy Code to Local Deployment Folder') {
+        stage('Build Docker Images') {
             steps {
-                bat '''
-                if not exist %DEPLOY_DIR% (
-                    mkdir %DEPLOY_DIR%
-                )
-
-                xcopy /E /I /Y backend %DEPLOY_DIR%\\backend
-                xcopy /E /I /Y frontend %DEPLOY_DIR%\\frontend
-                '''
+                bat "docker build -t %DOCKER_USERNAME%/%BACKEND_IMAGE%:%BUILD_NUMBER% backend"
+                bat "docker build -t %DOCKER_USERNAME%/%FRONTEND_IMAGE%:%BUILD_NUMBER% frontend"
             }
         }
 
-        stage('Backend Setup') {
+        stage('Docker Login') {
             steps {
-                bat '''
-                cd %DEPLOY_DIR%\\backend
-
-                if not exist .venv (
-                    python -m venv .venv
-                )
-
-                call .\\.venv\\Scripts\\activate
-                pip install -r requirements.txt
-                '''
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DH_USER',
+                    passwordVariable: 'DH_PASS'
+                )]) {
+                    bat "docker login -u %DH_USER% -p %DH_PASS%"
+                }
             }
         }
 
-        stage('Frontend Build') {
+        stage('Push to Docker Hub') {
             steps {
-                bat '''
-                cd %DEPLOY_DIR%\\frontend
-                npm install
-                npm run build
-                '''
+                bat "docker push %DOCKER_USERNAME%/%BACKEND_IMAGE%:%BUILD_NUMBER%"
+                bat "docker push %DOCKER_USERNAME%/%FRONTEND_IMAGE%:%BUILD_NUMBER%"
             }
         }
 
-        stage('Start Backend') {
+        stage('Deploy to Kubernetes') {
             steps {
-                bat '''
-                cd %DEPLOY_DIR%\\backend
-                call .\\.venv\\Scripts\\activate
-                start "" /B uvicorn main:app --host 0.0.0.0 --port %BACKEND_PORT%
-                '''
-            }
-        }
-
-        stage('Start Frontend') {
-            steps {
-                bat '''
-                cd %DEPLOY_DIR%\\frontend
-                start "" /B npx next start -p %FRONTEND_PORT%
-                '''
+                bat "kubectl apply -f k8s/backend-deployment.yaml"
+                bat "kubectl apply -f k8s/backend-service.yaml"
+                bat "kubectl apply -f k8s/frontend-deployment.yaml"
+                bat "kubectl apply -f k8s/frontend-service.yaml"
             }
         }
     }
